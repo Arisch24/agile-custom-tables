@@ -1,0 +1,27 @@
+{
+  "name": "agile-custom-tables",
+  "private": true,
+  "description": "Build tooling for Agile Custom Tables. Not needed at runtime.",
+  "license": "GPL-2.0-or-later",
+  "scripts": {
+    "build": "wp-scripts build",
+    "start": "wp-scripts start",
+    "release": "npm run build && bin/build-release.sh",
+    "lint:js": "wp-scripts lint-js src bin assets",
+    "lint:css": "wp-scripts lint-style \"src/**/*.css\" \"assets/**/*.css\"",
+    "format": "wp-scripts format src bin assets",
+    "test": "npm run build && npm run test:php",
+    "test:php": "ddev wp eval-file /var/www/html/wp-content/plugins/agile-custom-tables/tests/php/run.php",
+    "check:admin": "node bin/check-admin.mjs"
+  },
+  "dependencies": {
+    "@wordpress/api-fetch": "8.0.0",
+    "@wordpress/components": "43.0.0",
+    "@wordpress/element": "10.0.0",
+    "@wordpress/i18n": "7.0.0"
+  },
+  "devDependencies": {
+    "@wordpress/scripts": "37.0.0",
+    "playwright": "1.62.1"
+  }
+}
