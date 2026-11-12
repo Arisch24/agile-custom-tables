@@ -1,0 +1,6 @@
+.cct-fields td { vertical-align: top; }
+.cct-fields input[type="text"],
+.cct-fields select,
+.cct-fields textarea { width: 100%; }
+.cct-fields .cct-options { min-height: 40px; }
+.cct-type-form .form-table th { width: 160px; }
