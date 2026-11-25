@@ -1,47 +1,34 @@
-# Agile Custom Tables contributor rules
+# Agile Custom Tables
 
-Agile Custom Tables lets site owners define content types in the admin and stores each type's entries in its own database table. This is the free plugin for WordPress.org. Runtime code supports WordPress 6.6+ and PHP 7.4+; keep the plugin header and `readme.txt` requirements in sync, and use PHP 7.4 syntax and APIs in `agile-custom-tables.php`, `uninstall.php` and `includes/`.
+The free WordPress.org plugin: site owners define content types in wp-admin, and each type's entries live in their own table, `{$wpdb->prefix}agile_ct_{slug}`. Runtime code targets WordPress 6.6+ and PHP 7.4+, so write PHP 7.4 syntax in `agile-custom-tables.php`, `uninstall.php` and `includes/`, and keep the plugin header and `readme.txt` requirements in sync.
+
+## Git
+
+Work on a feature branch and open a pull request with `gh pr create`; commit to `main` only when the user asks for it in that session. This repo's local git config sets a GitHub noreply address as the commit email so the user's personal email stays out of the public history; keep it.
+
+## Naming
+
+Text domain `agile-custom-tables`, global prefixes `agile_ct_` / `AGILE_CT_`, admin slugs and handles `agile-ct-*`, PHP namespace `AgileCustomTables\` (PSR-4 in `includes/`). WordPress.org rejects two- and three-letter prefixes.
 
 ## Architecture
 
-- `includes/`: PSR-4 PHP classes, namespace `AgileCustomTables\`.
-  - `Registry`: type definitions (option `agile_ct_types`) and table sync through `dbDelta()`.
-  - `Entries`: entry CRUD, search/sort/paging queries, sanitising and `created_by` handling.
-  - `Capabilities`: `manage_types()` (default `manage_options`) and `manage_entries( $slug )` (default `edit_others_posts`), both filterable.
-  - `Admin`: server-rendered type builder and entry screens; `assets/admin.js` and `assets/admin.css` are plain files, not built.
-  - `EntriesTable`: the entry list, a `WP_List_Table`. `Admin::load_entries()` builds it on `load-{$hook}` and runs bulk actions there, before any output.
-  - `Settings`: option `agile_ct_settings`, REST route `agile-ct/v1/settings`, and the React settings screen.
-- `src/settings/`: the settings app, built with `@wordpress/scripts` into `build/settings.*`. Use `@wordpress/components`; WordPress provides React and the `@wordpress/*` packages at runtime.
-- `uninstall.php`: self-contained; drops data only when `delete_data_on_uninstall` is on.
-- `tests/php/`: checks run inside WordPress. `bin/check-admin.mjs` drives the admin in a browser.
-
-Use text domain `agile-custom-tables`, global prefixes `agile_ct_` / `AGILE_CT_`, admin slugs and handles `agile-ct-*`, and tables `{$wpdb->prefix}agile_ct_{slug}`. WordPress.org rejects two- and three-letter prefixes.
+- `Admin` renders the type builder and entry screens server-side; `assets/admin.js` and `assets/admin.css` are served as written, with no build step.
+- `EntriesTable` (a `WP_List_Table`) is built in `Admin::load_entries()` on `load-{$hook}`, so bulk actions and page redirects run before any output.
+- `src/settings/` is the React settings app, built by `@wordpress/scripts` into `build/`. Use `@wordpress/components`; WordPress supplies React and the `@wordpress/*` packages at runtime.
+- `Capabilities` holds both permission checks, each filterable: content types need `manage_options` (Administrators), entries `edit_others_posts` (Editors and up).
+- `uninstall.php` is self-contained and drops data only when the "delete data on uninstall" setting is on.
 
 ## Data safety
 
-- Never drop a column or table outside `uninstall.php`. Removing a field or a type leaves its column or table in place.
-- A field type change must not convert stored data: `Registry::sanitize_type()` rejects any column type change other than VARCHAR to LONGTEXT, including a removed field re-added under the same key.
-- Field keys may not use `Registry::RESERVED` (plugin columns and words `dbDelta()` reads as index definitions).
-- Pass numbers to `$wpdb` as `%s`; `%f` rounds to six decimals.
-- Deleting a user never deletes entries. `users_have_additional_content` makes WordPress ask who takes over a user with entries; the entries go to that user, or `created_by` is cleared if "Delete all content" is chosen.
-- Sort columns and search columns come from the type definition only; never put request values into SQL identifiers.
+Entries are the site owner's data; every change keeps them intact.
+
+- Columns and tables are dropped only in `uninstall.php`. Removing a field or a type leaves its column or table in place.
+- A field type change keeps stored values as they are: `Registry::sanitize_type()` allows only VARCHAR to LONGTEXT, including for a removed field re-added under the same key.
+- Field keys stay clear of `Registry::RESERVED` (the plugin's own columns, plus words `dbDelta()` reads as index definitions).
+- Numbers go to `$wpdb` as `%s`, because `%f` rounds to six decimals.
+- SQL identifiers such as sort and search columns come from the type definition; request values reach SQL only as placeholders.
+- Deleting a user keeps their entries: `users_have_additional_content` makes WordPress ask who takes them over, and "Delete all content" clears `created_by`.
 
 ## Free and Pro
 
-This plugin must stay fully functional: WordPress.org forbids locked features, quotas and trial limits. Paid features live in a separate Agile Custom Tables Pro add-on that extends this plugin through actions and filters. Licence checks and update code belong only in Pro.
-
-## Verification
-
-WSL has no PHP. Run PHP and Composer inside DDEV:
-
-```sh
-npm test
-npm run lint:js
-npm run lint:css
-ddev exec -d /var/www/html/wp-content/plugins/agile-custom-tables composer lint
-npm run check:admin
-```
-
-`npm test` rebuilds the settings app and runs the PHP checks. All gates must exit zero, and with `WP_DEBUG` enabled plugin code must produce no warnings, notices, deprecations or database errors. Checks may only create content types whose slug starts with `zz_test_` and users whose login starts with `test-agile-ct-`, and must remove them and restore any setting they change. The uninstall checks skip themselves on a site that has its own content types.
-
-`npm run release` builds the installable ZIP in `dist/`.
+This plugin stays fully functional: WordPress.org forbids locked features, quotas and trial limits.
