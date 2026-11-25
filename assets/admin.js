@@ -1,6 +1,7 @@
 /**
- * Type builder and entry screens: confirm destructive links, add/remove
- * field rows, fill field keys from labels and show options for selects.
+ * Type builder and entry screens: confirm destructive links and bulk
+ * deletes, add/remove field rows, fill field keys from labels and show
+ * options for selects.
  */
 ( function () {
 	'use strict';
@@ -13,6 +14,40 @@
 			event.preventDefault();
 		}
 	} );
+
+	// Entry list: confirm a bulk delete, and never run a bulk action that was
+	// left selected when the form is submitted from the search or page box.
+	const entriesForm = document.getElementById( 'agile-ct-entries-form' );
+	if ( entriesForm ) {
+		entriesForm.addEventListener( 'submit', ( event ) => {
+			const bulkButton =
+				event.submitter && /^doaction2?$/.test( event.submitter.id )
+					? event.submitter
+					: null;
+			const selects = entriesForm.querySelectorAll(
+				'select[name="action"], select[name="action2"]'
+			);
+			if ( ! bulkButton ) {
+				selects.forEach( ( select ) => {
+					select.value = '-1';
+				} );
+				return;
+			}
+			const chosen = bulkButton.parentElement.querySelector( 'select' );
+			if (
+				chosen &&
+				chosen.value === 'delete' &&
+				entriesForm.querySelector(
+					'tbody .check-column input:checked'
+				) &&
+				// eslint-disable-next-line no-alert -- a native confirm is enough here.
+				! window.confirm( entriesForm.dataset.confirm )
+			) {
+				event.preventDefault();
+				event.stopImmediatePropagation();
+			}
+		} );
+	}
 
 	const body = document.getElementById( 'agile-ct-fields-body' );
 	const template = document.getElementById( 'agile-ct-field-template' );

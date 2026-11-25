@@ -26,6 +26,13 @@ final class Admin {
 	private string $assets_url;
 
 	/**
+	 * The entry list being shown, built before the screen renders.
+	 *
+	 * @var EntriesTable|null
+	 */
+	private ?EntriesTable $table = null;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param string $assets_url URL of the assets folder, with a trailing slash.
@@ -46,6 +53,7 @@ final class Admin {
 		add_action( 'admin_post_agile_ct_delete_type', array( $this, 'handle_delete_type' ) );
 		add_action( 'admin_post_agile_ct_save_entry', array( $this, 'handle_save_entry' ) );
 		add_action( 'admin_post_agile_ct_delete_entry', array( $this, 'handle_delete_entry' ) );
+		add_action( 'delete_user_form', array( $this, 'delete_user_note' ), 10, 2 );
 	}
 
 	/**
@@ -70,7 +78,7 @@ final class Admin {
 		add_submenu_page( self::MENU, __( 'Add Content Type', 'agile-custom-tables' ), __( 'Add Type', 'agile-custom-tables' ), $types_cap, 'agile-ct-type-new', array( $this, 'page_type_new' ) );
 
 		foreach ( Registry::all() as $slug => $type ) {
-			add_submenu_page(
+			$hook = add_submenu_page(
 				self::MENU,
 				$type['plural'],
 				$type['plural'],
@@ -80,6 +88,14 @@ final class Admin {
 					$this->page_entries( $slug );
 				}
 			);
+			if ( $hook ) {
+				add_action(
+					'load-' . $hook,
+					function () use ( $slug ): void {
+						$this->load_entries( $slug );
+					}
+				);
+			}
 		}
 	}
 
@@ -447,115 +463,112 @@ final class Admin {
 	}
 
 	/**
-	 * Paged entry list.
+	 * Before an entry list renders: run a bulk action, tidy the URL after a
+	 * search, and load the page of entries.
+	 *
+	 * @param string $slug Type slug.
+	 * @return void
+	 */
+	public function load_entries( string $slug ): void {
+		$type   = Registry::get( $slug );
+		$action = isset( $_GET['action'] ) ? sanitize_key( wp_unslash( $_GET['action'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! $type || in_array( $action, array( 'add', 'edit' ), true ) ) {
+			return;
+		}
+		$this->guard_entries( $slug );
+
+		$this->table = new EntriesTable( $type, $this->entries_url( $slug ) );
+		$back        = $this->entries_url( $slug, $this->list_state() );
+
+		if ( 'delete' === $this->table->current_action() ) {
+			check_admin_referer( EntriesTable::BULK_NONCE );
+			$ids     = isset( $_REQUEST['entry'] ) ? array_map( 'absint', (array) wp_unslash( $_REQUEST['entry'] ) ) : array();
+			$deleted = Entries::delete_many( $type, $ids );
+			$this->notice(
+				'success',
+				/* translators: %s: number of entries */
+				sprintf( _n( '%s entry deleted.', '%s entries deleted.', $deleted, 'agile-custom-tables' ), number_format_i18n( $deleted ) )
+			);
+			$this->redirect( $back );
+		}
+
+		// The list form submits by GET; drop its nonce and empty bulk action from the URL.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- read-only: only rebuilds the list URL.
+		if ( ! empty( $_GET['_wp_http_referer'] ) ) {
+			// Keep the page number for a typed page, not for a new search.
+			parse_str( (string) wp_parse_url( sanitize_url( wp_unslash( $_GET['_wp_http_referer'] ) ), PHP_URL_QUERY ), $previous );
+			$same_search = ( isset( $previous['s'] ) && is_string( $previous['s'] ) ? trim( sanitize_text_field( $previous['s'] ) ) : '' ) === EntriesTable::search_term();
+			$paged       = isset( $_GET['paged'] ) ? absint( $_GET['paged'] ) : 0;
+			$this->redirect( $this->entries_url( $slug, $this->list_state() + ( $same_search && $paged > 1 ? array( 'paged' => $paged ) : array() ) ) );
+		}
+		// phpcs:enable
+
+		$this->table->prepare_items();
+	}
+
+	/**
+	 * Search and sort arguments of the current list, to keep after an action.
+	 *
+	 * @return array
+	 */
+	private function list_state(): array {
+		$state = array();
+		foreach ( array( 'orderby', 'order' ) as $key ) {
+			if ( ! empty( $_GET[ $key ] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+				$state[ $key ] = sanitize_key( wp_unslash( $_GET[ $key ] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			}
+		}
+		$search = EntriesTable::search_term();
+		if ( '' !== $search ) {
+			$state['s'] = rawurlencode( $search );
+		}
+		return $state;
+	}
+
+	/**
+	 * Entry list with search, sorting, bulk delete and paging.
 	 *
 	 * @param array $type Type definition.
 	 * @return void
 	 */
 	private function render_entry_list( array $type ): void {
-		$slug     = $type['slug'];
-		$per_page = 20;
-		$page     = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$total    = Entries::count( $type );
-		$entries  = Entries::query( $type, $page, $per_page );
-		$columns  = array_slice( $type['fields'], 0, 5 );
+		$slug   = $type['slug'];
+		$table  = $this->table ? $this->table : new EntriesTable( $type, $this->entries_url( $slug ) );
+		$search = EntriesTable::search_term();
+		if ( ! $this->table ) {
+			$table->prepare_items();
+		}
 
 		echo '<div class="wrap"><h1 class="wp-heading-inline">' . esc_html( $type['plural'] ) . '</h1>';
-		echo ' <a class="page-title-action" href="' . esc_url( $this->entries_url( $slug, array( 'action' => 'add' ) ) ) . '">' . esc_html__( 'Add New', 'agile-custom-tables' ) . '</a><hr class="wp-header-end">';
+		echo ' <a class="page-title-action" href="' . esc_url( $this->entries_url( $slug, array( 'action' => 'add' ) ) ) . '">' . esc_html__( 'Add New', 'agile-custom-tables' ) . '</a>';
+		if ( '' !== $search ) {
+			/* translators: %s: search term */
+			echo '<span class="subtitle">' . sprintf( esc_html__( 'Search results for: %s', 'agile-custom-tables' ), '<strong>' . esc_html( $search ) . '</strong>' ) . '</span>';
+		}
+		echo '<hr class="wp-header-end">';
 		$this->render_notice();
 
-		if ( empty( $entries ) ) {
-			echo '<p>' . esc_html__( 'Nothing here yet.', 'agile-custom-tables' ) . '</p></div>';
+		echo '<form method="get" id="agile-ct-entries-form" data-confirm="' . esc_attr__( 'Delete the selected entries? This cannot be undone.', 'agile-custom-tables' ) . '">';
+		echo '<input type="hidden" name="page" value="' . esc_attr( 'agile-ct-entries-' . $slug ) . '">';
+		if ( Entries::is_searchable( $type ) ) {
+			$table->search_box( __( 'Search entries', 'agile-custom-tables' ), 'agile-ct-search' );
+		}
+		$table->display();
+		echo '</form></div>';
+	}
+
+	/**
+	 * On the Delete Users screen, say what happens to entries.
+	 *
+	 * @param \WP_User $current_user Current user.
+	 * @param int[]    $user_ids     Users being deleted.
+	 * @return void
+	 */
+	public function delete_user_note( $current_user, $user_ids = array() ): void {
+		if ( ! Entries::authored_by_any( (array) $user_ids ) ) {
 			return;
 		}
-
-		// Load every author in one query instead of one per row.
-		$author_ids = array_filter( array_map( 'absint', wp_list_pluck( $entries, 'created_by' ) ) );
-		if ( $author_ids ) {
-			cache_users( $author_ids );
-		}
-
-		echo '<table class="wp-list-table widefat striped"><thead><tr><th class="agile-ct-col-id">' . esc_html__( 'ID', 'agile-custom-tables' ) . '</th>';
-		foreach ( $columns as $col ) {
-			echo '<th>' . esc_html( $col['label'] ) . '</th>';
-		}
-		echo '<th>' . esc_html__( 'Author', 'agile-custom-tables' ) . '</th><th>' . esc_html__( 'Created', 'agile-custom-tables' ) . '</th></tr></thead><tbody>';
-
-		foreach ( $entries as $entry ) {
-			$id         = (int) $entry['id'];
-			$edit_url   = $this->entries_url(
-				$slug,
-				array(
-					'action' => 'edit',
-					'id'     => $id,
-				)
-			);
-			$delete_url = wp_nonce_url( admin_url( 'admin-post.php?action=agile_ct_delete_entry&type=' . $slug . '&id=' . $id ), 'agile_ct_delete_entry_' . $slug . '_' . $id );
-
-			echo '<tr><td>' . esc_html( (string) $id ) . '</td>';
-			foreach ( $columns as $i => $col ) {
-				echo '<td>';
-				$display = $this->display_value( $col, isset( $entry[ $col['key'] ] ) ? $entry[ $col['key'] ] : '' );
-				if ( 0 === $i ) {
-					echo '<strong><a href="' . esc_url( $edit_url ) . '">' . esc_html( '' !== $display ? $display : __( '(empty)', 'agile-custom-tables' ) ) . '</a></strong>';
-					echo '<div class="row-actions visible"><a href="' . esc_url( $edit_url ) . '">' . esc_html__( 'Edit', 'agile-custom-tables' ) . '</a> | <a class="agile-ct-confirm" data-confirm="' . esc_attr__( 'Delete this entry?', 'agile-custom-tables' ) . '" href="' . esc_url( $delete_url ) . '">' . esc_html__( 'Delete', 'agile-custom-tables' ) . '</a></div>';
-				} else {
-					echo esc_html( $display );
-				}
-				echo '</td>';
-			}
-			echo '<td>' . esc_html( $this->author_name( $entry ) ) . '</td>';
-			echo '<td>' . esc_html( ! empty( $entry['created_at'] ) ? get_date_from_gmt( $entry['created_at'], get_option( 'date_format' ) ) : '' ) . '</td></tr>';
-		}
-		echo '</tbody></table>';
-
-		$pages = (int) ceil( $total / $per_page );
-		if ( $pages > 1 ) {
-			echo '<div class="tablenav"><div class="tablenav-pages">';
-			echo wp_kses_post(
-				paginate_links(
-					array(
-						'base'    => add_query_arg( 'paged', '%#%', $this->entries_url( $slug ) ),
-						'format'  => '',
-						'current' => $page,
-						'total'   => $pages,
-					)
-				)
-			);
-			echo '</div></div>';
-		}
-		echo '</div>';
-	}
-
-	/**
-	 * Display name of an entry's author, or a dash when unknown.
-	 *
-	 * @param array $entry Entry row.
-	 * @return string
-	 */
-	private function author_name( array $entry ): string {
-		$user = ! empty( $entry['created_by'] ) ? get_userdata( (int) $entry['created_by'] ) : false;
-		return $user ? $user->display_name : '—';
-	}
-
-	/**
-	 * Short text for a value in the list.
-	 *
-	 * @param array $field Field definition.
-	 * @param mixed $value Stored value.
-	 * @return string
-	 */
-	private function display_value( array $field, $value ): string {
-		if ( null === $value ) {
-			return '';
-		}
-		if ( 'checkbox' === $field['type'] ) {
-			return $value ? __( 'Yes', 'agile-custom-tables' ) : __( 'No', 'agile-custom-tables' );
-		}
-		if ( 'textarea' === $field['type'] ) {
-			return wp_trim_words( (string) $value, 12 );
-		}
-		return (string) $value;
+		echo '<p class="agile-ct-delete-user-note">' . esc_html__( 'Content type entries are never deleted with a user. If you choose "Delete all content", their entries stay and no longer have an author.', 'agile-custom-tables' ) . '</p>';
 	}
 
 	/**
@@ -584,7 +597,7 @@ final class Admin {
 				sprintf(
 					/* translators: 1: author name, 2: date created, 3: date last updated */
 					__( 'Created by %1$s on %2$s. Last updated %3$s.', 'agile-custom-tables' ),
-					$this->author_name( $entry ),
+					Entries::author_name( $entry ),
 					get_date_from_gmt( $entry['created_at'], $format ),
 					get_date_from_gmt( ! empty( $entry['updated_at'] ) ? $entry['updated_at'] : $entry['created_at'], $format )
 				)

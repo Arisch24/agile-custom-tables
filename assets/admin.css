@@ -16,6 +16,10 @@
 	width: 160px;
 }
 
-.agile-ct-col-id {
-	width: 60px;
+.agile-ct-entries .column-id {
+	width: 4em;
+}
+
+.agile-ct-entries .column-created_at {
+	width: 10%;
 }

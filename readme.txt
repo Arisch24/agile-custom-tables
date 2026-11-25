@@ -16,6 +16,7 @@ Agile Custom Tables lets you build your own content types, such as Events, Produ
 
 * Build content types with text, textarea, number, email, URL, date, checkbox and select fields.
 * Add, edit and delete entries from their own admin screens.
+* Search, sort and bulk-delete entries in a list that works like the Posts screen.
 * Editors and Administrators manage entries; only Administrators change the structure.
 * Every entry records who created it and when.
 * Removing a field or a content type never deletes data: columns and tables stay in place.
@@ -36,6 +37,10 @@ In a table named after the content type, for example `wp_agile_ct_events` for a 
 = What happens to my data if I deactivate or delete the plugin? =
 
 Deactivating never removes anything. Deleting the plugin also keeps your tables, unless you turn on "Delete all data when the plugin is deleted" under Content Types > Settings.
+
+= What happens to entries when I delete a user? =
+
+They are kept. WordPress asks who should take over the user's content, and their entries go to that person. If you choose "Delete all content", the entries stay and no longer show an author.
 
 = Who can manage entries? =
 

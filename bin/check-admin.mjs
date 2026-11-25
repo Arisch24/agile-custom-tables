@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Drive the admin screens in a real browser: type builder, entries, the
- * settings app, and what an Editor can and cannot reach.
+ * Drive the admin screens in a real browser: type builder, entries (search,
+ * sorting, bulk delete), the settings app, what an Editor can and cannot
+ * reach, and handing a deleted user's entries to someone else.
  *
  * Uses the reserved accounts test-agile-ct-check-admin and
  * test-agile-ct-check-editor and the content type zz_test_ui, and removes
@@ -73,6 +74,14 @@ const restoreSettings = () => {
 	}
 };
 
+// Add an entry directly, without an author.
+const seed = ( title, price ) =>
+	wp(
+		'eval',
+		`$t = AgileCustomTables\\Registry::get( '${ slug }' );
+		AgileCustomTables\\Entries::insert( $t, AgileCustomTables\\Entries::sanitize( $t, array( 'event_title' => '${ title }', 'price' => '${ price }' ) ) );`
+	);
+
 const removeFixtures = () => {
 	wp(
 		'eval',
@@ -142,6 +151,13 @@ const go = async ( page, path ) => {
 const submit = async ( page, selector = '#submit' ) => {
 	await Promise.all( [ page.waitForNavigation(), page.click( selector ) ] );
 };
+// Row actions only show while the row is hovered.
+const rowAction = async ( row, name ) => {
+	await row.hover();
+	return row.getByRole( 'link', { name, exact: true } );
+};
+const titles = ( page ) =>
+	page.locator( '.wp-list-table tbody .row-title' ).allInnerTexts();
 
 let browser;
 try {
@@ -230,7 +246,7 @@ try {
 	);
 	step( 'admin adds an entry; Author column shows them' );
 
-	await firstRow.getByRole( 'link', { name: 'Edit', exact: true } ).click();
+	await ( await rowAction( firstRow, 'Edit' ) ).click();
 	await page.waitForLoadState( 'load' );
 	assert.match(
 		await page.locator( '.agile-ct-entry-meta' ).innerText(),
@@ -283,11 +299,71 @@ try {
 		.waitFor();
 	step( 'settings app saves and reloads the uninstall option' );
 
+	seed( 'Alpha', '5' );
+	seed( 'Bravo', '99' );
 	await go( page, `admin.php?page=agile-ct-entries-${ slug }` );
+	const search = page.getByRole( 'searchbox', { name: 'Search entries' } );
+	await search.fill( 'bravo' );
+	await Promise.all( [ page.waitForNavigation(), search.press( 'Enter' ) ] );
+	assert.deepEqual( await titles( page ), [ 'Bravo' ] );
+	assert.match(
+		await page.locator( '.subtitle' ).innerText(),
+		/Search results for: bravo/
+	);
+	assert.doesNotMatch( page.url(), /_wpnonce|_wp_http_referer/ );
+	step( 'search finds entries and keeps a clean URL' );
+
+	await go( page, `admin.php?page=agile-ct-entries-${ slug }` );
+	await Promise.all( [
+		page.waitForNavigation(),
+		page.click( 'th#field_price a' ),
+	] );
+	assert.deepEqual( await titles( page ), [
+		'Alpha',
+		'Launch (edited)',
+		'Bravo',
+	] );
+	await Promise.all( [
+		page.waitForNavigation(),
+		page.click( 'th#field_price a' ),
+	] );
+	assert.deepEqual( await titles( page ), [
+		'Bravo',
+		'Launch (edited)',
+		'Alpha',
+	] );
+	step( 'sorting by a field, both ways' );
+
+	const pick = ( title ) =>
+		page
+			.locator( '.wp-list-table tbody tr', { hasText: title } )
+			.locator( 'input[name="entry[]"]' )
+			.check();
+	await go( page, `admin.php?page=agile-ct-entries-${ slug }` );
+	await pick( 'Launch (edited)' );
+	await page.selectOption( '#bulk-action-selector-top', 'delete' );
+	await search.fill( 'launch' );
+	await Promise.all( [ page.waitForNavigation(), search.press( 'Enter' ) ] );
+	assert.deepEqual( await titles( page ), [ 'Launch (edited)' ] );
+	step( 'searching never runs a bulk delete left selected' );
+
+	await go( page, `admin.php?page=agile-ct-entries-${ slug }` );
+	await pick( 'Alpha' );
+	await pick( 'Bravo' );
+	await page.selectOption( '#bulk-action-selector-top', 'delete' );
+	page.once( 'dialog', ( dialog ) => dialog.dismiss() );
+	await page.click( '#doaction' );
+	assert.equal( ( await titles( page ) ).length, 3 );
+	page.once( 'dialog', ( dialog ) => dialog.accept() );
+	await submit( page, '#doaction' );
+	assert.equal( await notice( page ), '2 entries deleted.' );
+	assert.deepEqual( await titles( page ), [ 'Launch (edited)' ] );
+	step( 'bulk delete asks first, then deletes only the selected entries' );
+
 	page.once( 'dialog', ( dialog ) => dialog.accept() );
 	await Promise.all( [
 		page.waitForNavigation(),
-		firstRow.getByRole( 'link', { name: 'Delete', exact: true } ).click(),
+		( await rowAction( firstRow, 'Delete' ) ).click(),
 	] );
 	assert.equal( await notice( page ), 'Deleted.' );
 	step( 'admin deletes an entry after confirming' );
@@ -330,6 +406,35 @@ try {
 		assert.equal( response.status(), 403, path );
 	}
 	step( 'editor is refused the type and settings screens' );
+
+	// --- Deleting the Editor: WordPress asks who gets their entries -------
+	const id = ( login ) => wp( 'user', 'get', login, '--field=ID' );
+	const editorId = id( accounts.editor.login );
+	await go( page, 'users.php' );
+	const deleteHref = await page
+		.locator( `#user-${ editorId } .submitdelete` )
+		.getAttribute( 'href' );
+	await page.goto( new URL( deleteHref, page.url() ).href );
+	assert.match(
+		await page.locator( '#updateusers fieldset legend' ).innerText(),
+		/What should be done with the content owned by this user\?/
+	);
+	assert.match(
+		await page.locator( '.agile-ct-delete-user-note' ).innerText(),
+		/never deleted/
+	);
+	await page.check( 'input[name^="delete_option"][value="reassign"]' );
+	await page.selectOption(
+		'select[name^="reassign_user"]',
+		id( accounts.admin.login )
+	);
+	await submit( page );
+	await go( page, `admin.php?page=agile-ct-entries-${ slug }` );
+	assert.match(
+		( await firstRow.innerText() ).replace( /\s+/g, ' ' ),
+		/Editor entry .*Check Admin/
+	);
+	step( 'deleting a user asks who takes over their entries' );
 
 	assert.deepEqual( problems, [] );
 	console.log( `\nAll ${ steps.length } admin checks passed.` );

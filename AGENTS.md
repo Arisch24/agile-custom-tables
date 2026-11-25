@@ -6,9 +6,10 @@ Agile Custom Tables lets site owners define content types in the admin and store
 
 - `includes/`: PSR-4 PHP classes, namespace `AgileCustomTables\`.
   - `Registry`: type definitions (option `agile_ct_types`) and table sync through `dbDelta()`.
-  - `Entries`: entry CRUD, sanitising and `created_by` handling.
+  - `Entries`: entry CRUD, search/sort/paging queries, sanitising and `created_by` handling.
   - `Capabilities`: `manage_types()` (default `manage_options`) and `manage_entries( $slug )` (default `edit_others_posts`), both filterable.
   - `Admin`: server-rendered type builder and entry screens; `assets/admin.js` and `assets/admin.css` are plain files, not built.
+  - `EntriesTable`: the entry list, a `WP_List_Table`. `Admin::load_entries()` builds it on `load-{$hook}` and runs bulk actions there, before any output.
   - `Settings`: option `agile_ct_settings`, REST route `agile-ct/v1/settings`, and the React settings screen.
 - `src/settings/`: the settings app, built with `@wordpress/scripts` into `build/settings.*`. Use `@wordpress/components`; WordPress provides React and the `@wordpress/*` packages at runtime.
 - `uninstall.php`: self-contained; drops data only when `delete_data_on_uninstall` is on.
@@ -22,7 +23,8 @@ Use text domain `agile-custom-tables`, global prefixes `agile_ct_` / `AGILE_CT_`
 - A field type change must not convert stored data: `Registry::sanitize_type()` rejects any column type change other than VARCHAR to LONGTEXT, including a removed field re-added under the same key.
 - Field keys may not use `Registry::RESERVED` (plugin columns and words `dbDelta()` reads as index definitions).
 - Pass numbers to `$wpdb` as `%s`; `%f` rounds to six decimals.
-- Deleting a user reassigns or clears `created_by`; it never deletes entries.
+- Deleting a user never deletes entries. `users_have_additional_content` makes WordPress ask who takes over a user with entries; the entries go to that user, or `created_by` is cleared if "Delete all content" is chosen.
+- Sort columns and search columns come from the type definition only; never put request values into SQL identifiers.
 
 ## Free and Pro
 

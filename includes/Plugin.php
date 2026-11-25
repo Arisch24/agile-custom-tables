@@ -47,7 +47,10 @@ final class Plugin {
 	 * @return void
 	 */
 	public function boot(): void {
+		// Deleting a user: ask who takes over their entries, then hand them over.
+		add_filter( 'users_have_additional_content', array( Entries::class, 'users_have_entries' ), 10, 2 );
 		add_action( 'deleted_user', array( Entries::class, 'reassign_author' ), 10, 2 );
+		add_action( 'remove_user_from_blog', array( Entries::class, 'reassign_on_site_removal' ), 10, 3 );
 
 		( new Settings( $this->dir . 'build/', $this->url . 'build/' ) )->register_hooks();
 
